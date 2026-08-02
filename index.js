@@ -95,16 +95,22 @@ function buildMatchEmbed(battleEntry, targetTag) {
   const mode = battle.mode || eventInfo.mode || 'Inconnu';
   const mapName = eventInfo.map || 'Inconnue';
 
+  const isShowdown = /showdown/i.test(mode);
+  const rank = typeof battle.rank === 'number' ? battle.rank : null;
+
   // battle.result n'existe que sur les modes par equipe / 1v1 direct.
   // Pour les modes en classement (showdown), on deduit via battle.rank.
   let result = battle.result;
-  if (!result && typeof battle.rank === 'number') {
-    result = battle.rank <= 2 ? 'victory' : 'defeat';
+  if (!result && rank !== null) {
+    result = rank <= 2 ? 'victory' : 'defeat';
   }
   if (!result) result = 'draw';
 
   const color = RESULT_COLOR[result] ?? RESULT_COLOR.draw;
-  const resultLabel = RESULT_LABEL_FR[result] ?? 'Résultat inconnu';
+  // En Showdown on affiche directement le classement plutot que Victoire/Defaite
+  const resultLabel = (isShowdown && rank !== null)
+    ? `🏅 Top ${rank}`
+    : (RESULT_LABEL_FR[result] ?? 'Résultat inconnu');
 
   let teamLines = [];
   let enemyLines = [];
@@ -156,6 +162,22 @@ function buildMatchEmbed(battleEntry, targetTag) {
   return embed;
 }
 
+// En mode Showdown (solo ou duo), on ne notifie que du Top 10 au Top 1.
+// Les autres modes (brawlBall, gemGrab, etc.) sont toujours notifies.
+function shouldNotify(battleEntry) {
+  const battle = battleEntry.battle || {};
+  const eventInfo = battleEntry.event || {};
+  const mode = battle.mode || eventInfo.mode || '';
+  const isShowdown = /showdown/i.test(mode);
+
+  if (!isShowdown) return true;
+
+  const rank = typeof battle.rank === 'number' ? battle.rank : null;
+  if (rank === null) return true; // pas d'info de classement, on notifie par defaut
+
+  return rank <= 10;
+}
+
 function parseBattleTime(bsTime) {
   // Format Brawl Stars: "20260630T220100.000Z" -> ISO valide
   if (!bsTime) return Date.now();
@@ -181,15 +203,20 @@ async function checkTag(tag, channel) {
       .filter(b => !seen.includes(b.battleTime))
       .reverse();
 
+    let postedCount = 0;
     for (const battleEntry of newBattles) {
-      const embed = buildMatchEmbed(battleEntry, tag);
-      await channel.send({ embeds: [embed] });
+      if (shouldNotify(battleEntry)) {
+        const embed = buildMatchEmbed(battleEntry, tag);
+        await channel.send({ embeds: [embed] });
+        postedCount++;
+      }
+      // On marque comme vu meme si non poste, pour ne jamais le reproposer.
       seen.push(battleEntry.battleTime);
     }
 
     if (newBattles.length) {
       saveSeen(tag, seen);
-      console.log(`✅ ${newBattles.length} nouvelle(s) game(s) postee(s) pour ${tag}`);
+      console.log(`✅ ${postedCount}/${newBattles.length} nouvelle(s) game(s) postee(s) pour ${tag} (le reste filtre : Showdown hors Top 10)`);
     }
   } catch (err) {
     const status = err.response?.status;
